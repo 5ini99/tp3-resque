@@ -1,87 +1,303 @@
-php-resque: PHP Resque Worker (and Enqueue) [![Build Status](https://secure.travis-ci.org/chrisboulton/php-resque.png)](http://travis-ci.org/chrisboulton/php-resque)
+ThinkPHP3.2 集成 php-resque: PHP Resque Worker (and Enqueue) (http://travis-ci.org/chrisboulton/php-resque)
 ===========================================
 
-Resque is a Redis-backed library for creating background jobs, placing
-those jobs on multiple queues, and processing them later.
+php-resque是php环境中一个轻量级的队列服务。
 
-## Background ##
-
-Resque was pioneered and is developed by the fine folks at GitHub (yes,
-I am a kiss-ass), and written in Ruby. What you're seeing here is an
-almost direct port of the Resque worker and enqueue system to PHP.
-
-For more information on Resque, visit the official GitHub project:
- <http://github.com/defunkt/resque/>
-
-For further information, see the launch post on the GitHub blog:
- <http://github.com/blog/542-introducing-resque>
-
-The PHP port does NOT include its own web interface for viewing queue
-stats, as the data is stored in the exact same expected format as the
-Ruby version of Resque.
-
-The PHP port provides much the same features as the Ruby version:
-
-* Workers can be distributed between multiple machines
-* Includes support for priorities (queues)
-* Resilient to memory leaks (fork)
-* Expects failure
-
-It also supports the following additional features:
-
-* Has the ability to track the status of jobs
-* Will mark a job as failed, if a forked child running a job does
-not exit with a status code as 0
-* Has built in support for `setUp` and `tearDown` methods, called
-pre and post jobs
-
-## Requirements ##
+## 运行环境 ##
 
 * PHP 5.2+
 * Redis 2.2+
 
-## Jobs ##
+## 集成方法 ##
 
-### Queueing Jobs ###
+### 将源码放到ThinkPHP的Vendor目录中 ###
 
-Jobs are queued as follows:
+将源码更新到 ThinkPHP/Library/Vendor/php-resque/ 目录中
 
-    require_once 'lib/Resque.php';
+### 在项目根目录中创建resque入口脚本 ###
 
-	// Required if redis is located elsewhere
-	Resque::setBackend('localhost:6379');
+	#!/usr/bin/env php
+	<?php
+	ini_set('display_errors', true);
+	error_reporting(E_ERROR);
+	set_time_limit(0);
+	
+	define('MODE_NAME', 'cli');	// 自定义cli模式
+	define('BIND_MODULE', 'Home');	// 绑定到Home模块
+	define('BIND_CONTROLLER', 'Queue');	// 绑定到Queue控制器
+	define('BIND_ACTION', 'index');	// 绑定到index方法
+	
+	// 处理自定义参数
+	$act = $argv[1] ?? 'start';
+	putenv("Q_ACTION={$act}");
+	putenv("Q_ARGV=" . json_encode($argv));
+	
+	require './ThinkPHP/ThinkPHP.php';
 
-	$args = array(
-		'name' => 'Chris'
-	);
-	Resque::enqueue('default', 'My_Job', $args);
+### 创建Queue控制器 ###
 
-### Defining Jobs ###
+在`Home`模块的`Controller`中创建`Queue`控制器
 
-Each job should be in it's own class, and include a `perform` method.
-
-	class My_Job
+	<?php
+	namespace Home\Controller;
+	
+	if (!IS_CLI)  die('The file can only be run in cli mode!');
+	use Exception;
+	use Resque;
+	
+	/***
+	 * queue入口
+	 * Class Worker
+	 * @package Common\Controller
+	 */
+	class QueueController
 	{
-		public function perform()
-		{
-			// Work work work
-			echo $this->args['name'];
-		}
+	    protected $vendor;
+	    protected $args = [];
+	    protected $keys = [];
+	    protected $queues = '*';
+	
+	    public function __construct()
+	    {
+	        vendor('php-resque.autoload');
+	        $argv = json_decode(getenv('Q_ARGV'));
+	        foreach ($argv as $item) {
+	            if (strpos($item, '=')) {
+	                list($key, $val) = explode('=', $item);
+	            } else {
+	                $key = $val = $item;
+	            }
+	            $this->keys[] = $key;
+	            $this->args[$key] = $val;
+	        }
+	
+	        $this->init();
+	    }
+	
+	    /**
+	     * 执行队列
+	     * 环境变量参数值：
+	     * --queue|QUEUE: 需要执行的队列的名字
+	     * --interval|INTERVAL：在队列中循环的间隔时间，即完成一个任务后的等待时间，默认是5秒
+	     * --app|APP_INCLUDE：需要自动载入PHP文件路径，Worker需要知道你的Job的位置并载入Job
+	     * --count|COUNT：需要创建的Worker的数量。所有的Worker都具有相同的属性。默认是创建1个Worker
+	     * --debug|VVERBOSE：设置“1”启用更啰嗦模式，会输出详细的调试信息
+	     * --pid|PIDFILE：手动指定PID文件的位置，适用于单Worker运行方式
+	     */
+	    private function init()
+	    {
+	        $is_sington = false; //是否单例运行，单例运行会在tmp目录下建立一个唯一的PID
+	
+	        // 根据参数设置QUEUE环境变量
+	        $QUEUE = in_array('--queue', $this->keys) ? $this->args['--queue'] : '*';
+	        if (empty($QUEUE)) {
+	            die("Set QUEUE env var containing the list of queues to work.\n");
+	        }
+	        $this->queues = explode(',', $QUEUE);
+	
+	        // 根据参数设置INTERVAL环境变量
+	        $interval = in_array('--interval', $this->keys) ? $this->args['--interval'] : 5;
+	        putenv("INTERVAL={$interval}");
+	
+	        // 根据参数设置COUNT环境变量
+	        $count = in_array('--count', $this->keys) ? $this->args['--count'] : 1;
+	        putenv("COUNT={$count}");
+	
+	        // 根据参数设置APP_INCLUDE环境变量
+	        $app = in_array('--app', $this->keys) ? $this->args['--app'] : '';
+	        putenv("APP_INCLUDE={$app}");
+	
+	        // 根据参数设置PIDFILE环境变量
+	        $pid = in_array('--pid', $this->keys) ? $this->args['--pid'] : '';
+	        putenv("PIDFILE={$pid}");
+	
+	        // 根据参数设置VVERBOSE环境变量
+	        $debug = in_array('--debug', $this->keys) ? $this->args['--debug'] : '';
+	        putenv("VVERBOSE={$debug}");
+	    }
+	
+	    public function index()
+	    {
+	        $act = getenv('Q_ACTION');
+	        switch ($act) {
+	            case 'stop':
+	                $this->stop();
+	                break;
+	            case 'status':
+	                $this->status();
+	                break;
+	            default:
+	                $this->start();
+	        }
+	    }
+	
+	    /**
+	     * 开始队列
+	     */
+	    public function start()
+	    {
+	        // 载入任务类
+	        $path = COMMON_PATH . "Job";
+	        $flag = \FilesystemIterator::KEY_AS_FILENAME;
+	        $glob = new \FilesystemIterator($path, $flag);
+	        foreach ($glob as $file) {
+	            if('php' === pathinfo($file, PATHINFO_EXTENSION))
+	                require realpath($file);
+	        }
+	
+	        $logLevel = 0;
+	        $LOGGING = getenv('LOGGING');
+	        $VERBOSE = getenv('VERBOSE');
+	        $VVERBOSE = getenv('VVERBOSE');
+	        if (!empty($LOGGING) || !empty($VERBOSE)) {
+	            $logLevel = Resque\Worker::LOG_NORMAL;
+	        } else {
+	            if (!empty($VVERBOSE)) {
+	                $logLevel = Resque\Worker::LOG_VERBOSE;
+	            }
+	        }
+	
+	        $APP_INCLUDE = getenv('APP_INCLUDE');
+	        if ($APP_INCLUDE) {
+	            if (!file_exists($APP_INCLUDE)) {
+	                die('APP_INCLUDE (' . $APP_INCLUDE . ") does not exist.\n");
+	            }
+	            require_once $APP_INCLUDE;
+	        }
+	
+	        $interval = 5;
+	        $INTERVAL = getenv('INTERVAL');
+	        if (!empty($INTERVAL)) {
+	            $interval = $INTERVAL;
+	        }
+	
+	        $count = 1;
+	        $COUNT = getenv('COUNT');
+	        if (!empty($COUNT) && $COUNT > 1) {
+	            $count = $COUNT;
+	        }
+	
+	        if ($count > 1) {
+	            for ($i = 0; $i < $count; ++$i) {
+	                $pid = pcntl_fork();
+	                if ($pid == -1) {
+	                    die("Could not fork worker " . $i . "\n");
+	                } // Child, start the worker
+	                else {
+	                    if (!$pid) {
+	                        $worker = new Resque\Worker($this->queues);
+	                        $worker->logLevel = $logLevel;
+	                        fwrite(STDOUT, '*** Starting worker ' . $worker . "\n");
+	                        $worker->work($interval);
+	                        break;
+	                    }
+	                }
+	            }
+	        } // Start a single worker
+	        else {
+	            $worker = new Resque\Worker($this->queues);
+	            $worker->logLevel = $logLevel;
+	
+	            $PIDFILE = getenv('PIDFILE');
+	            if ($PIDFILE) {
+	                file_put_contents($PIDFILE, getmypid()) or
+	                die('Could not write PID information to ' . $PIDFILE);
+	            }
+	
+	            fwrite(STDOUT, '*** Starting worker ' . $worker . "\n");
+	            $worker->work($interval);
+	        }
+	    }
+	
+	    /**
+	     * 停止队列
+	     */
+	    public function stop()
+	    {
+	        $worker = new Resque\Worker($this->queues);
+	        $worker->shutdown();
+	    }
+	
+	    /**
+	     * 查看某个任务状态
+	     */
+	    public function status()
+	    {
+	        $id = in_array('--id', $this->keys) ? $this->args['--id'] : '';
+	        $status = new \Resque\Job\Status($id);
+	        if (!$status->isTracking()) {
+	            die("Resque is not tracking the status of this job.\n");
+	        }
+	
+	        echo "Tracking status of " . $id . ". Press [break] to stop.\n\n";
+	        while (true) {
+	            fwrite(STDOUT, "Status of " . $id . " is: " . $status->get() . "\n");
+	            sleep(1);
+	        }
+	    }
 	}
 
-When the job is run, the class will be instantiated and any arguments
-will be set as an array on the instantiated object, and are accessible
-via `$this->args`.
+### 新增队列配置 ###
 
-Any exception thrown by a job will result in the job failing - be
-careful here and make sure you handle the exceptions that shouldn't
-result in a job failing.
+在公共`config.php`中新增队列配置，如下
 
-Jobs can also have `setUp` and `tearDown` methods. If a `setUp` method
-is defined, it will be called before the `perform` method is run.
-The `tearDown` method if defined, will be called after the job finishes.
+	/* 消息队列配置 */
+    'QUEUE' => array(
+        'type' => 'redis',
+        'host' => '127.0.0.1',
+        'port' =>  '6379',
+        'prefix' => 'queue',
+        'auth' =>  '',
+    ),
 
-	class My_Job
+### 新增队列初始化行为 ###
+
+在`app_init`行为中新增队列初始化的行为，`run`内容为
+
+    public function run()
+    {
+		// 处理队列配置
+	    $config = C('QUEUE');
+	    if ($config) {
+	        vendor('php-resque.autoload');
+	        // 初始化队列服务,使用database(1)
+	        \Resque::setBackend(['redis' => $config], 1);
+	        // 初始化缓存前缀
+	        if(isset($config['prefix']) && !empty($config['prefix']))
+	        \Resque\Redis::prefix($config['prefix']);
+	    }
+	}
+
+到此，整个队列服务基本已配置完成。
+
+接下来就要创建队列执行的任务了
+
+## Jobs ##
+
+### 创建 Jobs ###
+
+目前任务类固定在`Common`模块的`Job`中，命名格式为`XxxxJob.class.php`
+
+	<?php
+	namespace Common\Job;
+	class XxxxJob
+	{
+	    public function perform()
+	    {
+	        $args = $this->args;
+	        fwrite(STDOUT, json_encode($args) . PHP_EOL);
+	    }
+	}
+
+要获取队列中传入的参数值请使用`$this->args`
+
+任务perform方法中抛出的任何异常都会导致任务失败，所以在写任务业务时要小心，并且处理异常情况。
+
+任务也有`setUp`和`tearDown`方法，如果定义了一个`setUp`方法，那么它将在`perform`方法之前调用，如果定义了一个`tearDown`方法，那么它将会在`perform`方法之后调用。
+
+	<?php
+	namespace Common\Job;
+	class XxxxJob
 	{
 		public function setUp()
 		{
@@ -99,246 +315,64 @@ The `tearDown` method if defined, will be called after the job finishes.
 		}
 	}
 
-### Tracking Job Statuses ###
+### 添加任务到队列中 ###
 
-php-resque has the ability to perform basic status tracking of a queued
-job. The status information will allow you to check if a job is in the
-queue, currently being run, has finished, or failed.
+在程序控制器的任意方法中引入队列类库时，使用`Resque::enqueue`方法执行入栈，`Resque::enqueue`方法有四个参数，第一个是当前的队列名称，第二个参数为任务类，第三个是传入的参数，第四个表示是否返回工作状态的令牌
 
-To track the status of a job, pass `true` as the fourth argument to
-`Resque::enqueue`. A token used for tracking the job status will be
-returned:
+	vendor('php-resque.autoload');	// 引入队列类库
+    $job = '\\Common\\Job\\XxxxJob'; // 定义任务类
+	// 定义参数
+    $args = array(
+        'time' => time(),
+        'array' => array(
+            'test' => 'test',
+        ),
+    );
+	// 入栈
+    $jobId = \Resque::enqueue('default', $job, $args, true);
+    echo "Queued job ".$jobId."\n\n";
 
-	$token = Resque::enqueue('default', 'My_Job', $args, true);
-	echo $token;
+如果要查看当前任务的工作状态可以使用如下方法：
 
-To fetch the status of a job:
-
-	$status = new Resque_Job_Status($token);
+	$status = new \Resque\Job\Status($jobId);
 	echo $status->get(); // Outputs the status
 
-Job statuses are defined as constants in the `Resque_Job_Status` class.
-Valid statuses include:
+任务的工作状态值有专门的常量``\Resque\Job\Status``对应类。
+具体的对应关系如下：
 
-* `Resque_Job_Status::STATUS_WAITING` - Job is still queued
-* `Resque_Job_Status::STATUS_RUNNING` - Job is currently running
-* `Resque_Job_Status::STATUS_FAILED` - Job has failed
-* `Resque_Job_Status::STATUS_COMPLETE` - Job is complete
-* `false` - Failed to fetch the status - is the token valid?
+* `Resque\Job\Status::STATUS_WAITING` - 任务在队列中
+* `Resque\Job\Status::STATUS_RUNNING` - 任务正在运行
+* `Resque\Job\Status::STATUS_FAILED` - 任务执行失败
+* `Resque\Job\Status::STATUS_COMPLETE` - 任务执行完成
+* `false` - 无法获取状态 - 检查令牌是否有效?
 
-Statuses are available for up to 24 hours after a job has completed
-or failed, and are then automatically expired. A status can also
-forcefully be expired by calling the `stop()` method on a status
-class.
+任务的过期时间为任务完成后的24小时后，也可以定义过期类的`stop()`方法
 
-## Workers ##
+## 队列任务启动 ##
 
-Workers work in the exact same way as the Ruby workers. For complete
-documentation on workers, see the original documentation.
+在命令行中转到项目根目录，执行
 
-A basic "up-and-running" resque.php file is included that sets up a
-running worker environment is included in the root directory.
+    $ php resque start
 
-The exception to the similarities with the Ruby version of resque is
-how a worker is initially setup. To work under all environments,
-not having a single environment such as with Ruby, the PHP port makes
-*no* assumptions about your setup.
+即可启动服务
 
-To start a worker, it's very similar to the Ruby version:
+启动时也可以加入部分参数：
 
-    $ QUEUE=file_serve php resque.php
+* `--queue` - 需要执行的队列的名字，可以为空，也可以多个以`,`分割
+* `--interval` -在队列中循环的间隔时间，即完成一个任务后的等待时间，默认是5秒
+* `--count` - 需要创建的Worker的数量。所有的Worker都具有相同的属性。默认是创建1个Worker
+* `--debug` - 设置“1”启用更啰嗦模式，会输出详细的调试信息
+* `--pid` - 手动指定PID文件的位置，适用于单Worker运行方式
 
-It's your responsibility to tell the worker which file to include to get
-your application underway. You do so by setting the `APP_INCLUDE` environment
-variable:
+如：
 
-   $ QUEUE=file_serve APP_INCLUDE=../application/init.php php resque.php
+	$ php resque start --queue=default --pid=/tmp/resque.pid --debug=1
 
-Getting your application underway also includes telling the worker your job
-classes, by means of either an autoloader or including them.
+如果要使用守护进程方式启动则需要在最后加入`&`即可
 
-### Logging ###
+如：
 
-The port supports the same environment variables for logging to STDOUT.
-Setting `VERBOSE` will print basic debugging information and `VVERBOSE`
-will print detailed information.
+	$ php resque start --queue=default --pid=/tmp/resque.pid --debug=1 &
 
-    $ VERBOSE QUEUE=file_serve php resque.php
-    $ VVERBOSE QUEUE=file_serve php resque.php
 
-### Priorities and Queue Lists ###
-
-Similarly, priority and queue list functionality works exactly
-the same as the Ruby workers. Multiple queues should be separated with
-a comma, and the order that they're supplied in is the order that they're
-checked in.
-
-As per the original example:
-
-	$ QUEUE=file_serve,warm_cache php resque.php
-
-The `file_serve` queue will always be checked for new jobs on each
-iteration before the `warm_cache` queue is checked.
-
-### Running All Queues ###
-
-All queues are supported in the same manner and processed in alphabetical
-order:
-
-    $ QUEUE=* php resque.php
-
-### Running Multiple Workers ###
-
-Multiple workers ca be launched and automatically worked by supplying
-the `COUNT` environment variable:
-
-	$ COUNT=5 php resque.php
-
-### Forking ###
-
-Similarly to the Ruby versions, supported platforms will immediately
-fork after picking up a job. The forked child will exit as soon as
-the job finishes.
-
-The difference with php-resque is that if a forked child does not
-exit nicely (PHP error or such), php-resque will automatically fail
-the job.
-
-### Signals ###
-
-Signals also work on supported platforms exactly as in the Ruby
-version of Resque:
-
-* `QUIT` - Wait for child to finish processing then exit
-* `TERM` / `INT` - Immediately kill child then exit
-* `USR1` - Immediately kill child but don't exit
-* `USR2` - Pause worker, no new jobs will be processed
-* `CONT` - Resume worker.
-
-### Process Titles/Statuses ###
-
-The Ruby version of Resque has a nifty feature whereby the process
-title of the worker is updated to indicate what the worker is doing,
-and any forked children also set their process title with the job
-being run. This helps identify running processes on the server and
-their resque status.
-
-**PHP does not have this functionality by default.**
-
-A PECL module (<http://pecl.php.net/package/proctitle>) exists that
-adds this funcitonality to PHP, so if you'd like process titles updated,
-install the PECL module as well. php-resque will detect and use it.
-
-## Event/Hook System ##
-
-php-resque has a basic event system that can be used by your application
-to customize how some of the php-resque internals behave.
-
-You listen in on events (as listed below) by registering with `Resque_Event`
-and supplying a callback that you would like triggered when the event is
-raised:
-
-	Resque_Event::listen('eventName', [callback]);
-
-`[callback]` may be anything in PHP that is callable by `call_user_func_array`:
-
-* A string with the name of a function
-* An array containing an object and method to call
-* An array containing an object and a static method to call
-* A closure (PHP 5.3)
-
-Events may pass arguments (documented below), so your callback should accept
-these arguments.
-
-You can stop listening to an event by calling `Resque_Event::stopListening`
-with the same arguments supplied to `Resque_Event::listen`.
-
-It is up to your application to register event listeners. When enqueuing events
-in your application, it should be as easy as making sure php-resque is loaded
-and calling `Resque_Event::listen`.
-
-When running workers, if you run workers via the default `resque.php` script,
-your `APP_INCLUDE` script should initialize and register any listeners required
-for operation. If you have rolled your own worker manager, then it is again your
-responsibility to register listeners.
-
-A sample plugin is included in the `extras` directory.
-
-### Events ###
-
-#### beforeFirstFork ####
-
-Called once, as a worker initializes. Argument passed is the instance of `Resque_Worker`
-that was just initialized.
-
-#### beforeFork ####
-
-Called before php-resque forks to run a job. Argument passed contains the instance of
-`Resque_Job` for the job about to be run.
-
-`beforeFork` is triggered in the **parent** process. Any changes made will be permanent
-for as long as the worker lives.
-
-#### afterFork ####
-
-Called after php-resque forks to run a job (but before the job is run). Argument
-passed contains the instance of `Resque_Job` for the job about to be run.
-
-`afterFork` is triggered in the child process after forking out to complete a job. Any
-changes made will only live as long as the job is being processed.
-
-#### beforePerform ####
-
-Called before the `setUp` and `perform` methods on a job are run. Argument passed
-contains the instance of `Resque_Job` about for the job about to be run.
-
-You can prevent execution of the job by throwing an exception of `Resque_Job_DontPerform`.
-Any other exceptions thrown will be treated as if they were thrown in a job, causing the
-job to fail.
-
-#### afterPerform ####
-
-Called after the `perform` and `tearDown` methods on a job are run. Argument passed
-contains the instance of `Resque_Job` that was just run.
-
-Any exceptions thrown will be treated as if they were thrown in a job, causing the job
-to be marked as having failed.
-
-#### onFailure ####
-
-Called whenever a job fails. Arguments passed (in this order) include:
-
-* Exception - The exception that was thrown when the job failed
-* Resque_Job - The job that failed
-
-#### afterEnqueue ####
-
-Called after a job has been queued using the `Resque::enqueue` method. Arguments passed
-(in this order) include:
-
-* Class - string containing the name of scheduled job
-* Arguments - array of arguments supplied to the job
-* Queue - string containing the name of the queue the job was added to
-
-## Contributors ##
-
-* chrisboulton
-* thedotedge
-* hobodave
-* scraton
-* KevBurnsJr
-* jmathai
-* dceballos
-* patrickbajao
-* andrewjshults
-* warezthebeef
-* d11wtq
-* hlegius
-* salimane
-* humancopy
-* pedroarnal
-* chaitanyakuber
-* maetl
-* Matt Heath
-* jjfrey
-* scragg0x
+更多的操作请参考php-resque官方文档。
