@@ -1,7 +1,7 @@
-ThinkPHP3.2 集成 php-resque: PHP Resque Worker (and Enqueue) (http://travis-ci.org/chrisboulton/php-resque)
+ThinkPHP3.2 集成 php-resque: PHP Resque Worker
 ===========================================
 
-php-resque是php环境中一个轻量级的队列服务。
+php-resque是php环境中一个轻量级的队列服务。具体队列服务是做什么用的，请自行百度！
 
 ## 运行环境 ##
 
