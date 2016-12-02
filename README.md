@@ -374,5 +374,6 @@ php-resque是php环境中一个轻量级的队列服务。具体队列服务是�
 
 	$ php resque start --queue=default --pid=/tmp/resque.pid --debug=1 &
 
+也可以配合supervisord实现进程长驻
 
 更多的操作请参考php-resque官方文档。
