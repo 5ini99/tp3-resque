@@ -28,7 +28,7 @@ php-resque是php环境中一个轻量级的队列服务。具体队列服务是�
 	define('BIND_ACTION', 'index');	// 绑定到index方法
 	
 	// 处理自定义参数
-	$act = $argv[1] ?? 'start';
+	$act = isset($argv[1]) ? $argv[1] : 'start';
 	putenv("Q_ACTION={$act}");
 	putenv("Q_ARGV=" . json_encode($argv));
 	
