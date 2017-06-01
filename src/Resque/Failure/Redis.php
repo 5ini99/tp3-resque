@@ -21,7 +21,7 @@ class Redis implements Interfaces
 	 */
 	public function __construct($payload, $exception, $worker, $queue)
 	{
-		$data = new stdClass;
+		$data = new \stdClass;
 		$data->failed_at = strftime('%a %b %d %H:%M:%S %Z %Y');
 		$data->payload = $payload;
 		$data->exception = get_class($exception);
