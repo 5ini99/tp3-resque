@@ -246,8 +246,9 @@ php-resque是php环境中一个轻量级的队列服务。具体队列服务是�
         'type' => 'redis',
         'host' => '127.0.0.1',
         'port' =>  '6379',
+        'persistent' => false, //是否启用
         'prefix' => 'queue',
-        'auth' =>  '',
+        'password' =>  '', // 密码
     ),
 
 ### 新增队列初始化行为 ###
@@ -260,11 +261,17 @@ php-resque是php环境中一个轻量级的队列服务。具体队列服务是�
 	    $config = C('QUEUE');
 	    if ($config) {
 	        vendor('php-resque.autoload');
-	        // 初始化队列服务,使用database(1)
-	        \Resque::setBackend(['redis' => $config], 1);
+	        // 初始化队列服务
+            $select = isset($config['select']) ? $config['select'] : 0;
+            $password = isset($config['password']) ? $config['password'] : null;
+            $persistent = isset($config['persistent']) ? $config['persistent'] : false;
+            $timeout = isset($config['timeout']) ? $config['timeout'] : 30;
+            $server = $config['host'] . ":" . $config['port'];
+            \Resque::setBackend($server, $select, $password, $persistent, $timeout);
 	        // 初始化缓存前缀
-	        if(isset($config['prefix']) && !empty($config['prefix']))
-	        \Resque\Redis::prefix($config['prefix']);
+	        if(isset($config['prefix']) && !empty($config['prefix'])){
+	            \Resque\Redis::prefix($config['prefix']);
+	        }
 	    }
 	}
 
