@@ -13,7 +13,7 @@ php-resque是php环境中一个轻量级的队列服务。具体队列服务是�
 ### 将源码放到ThinkPHP的Vendor目录中 ###
 
 将源码更新到 ThinkPHP/Library/Vendor/php-resque/ 目录中
-
+<font color=red>注意要定义应用目录，之前发的内容没定义应用目录导致部分小伙伴引发了找不到Queue类的异常</font>
 ### 在项目根目录中创建resque入口脚本 ###
 
 	#!/usr/bin/env php
@@ -21,6 +21,9 @@ php-resque是php环境中一个轻量级的队列服务。具体队列服务是�
 	ini_set('display_errors', true);
 	error_reporting(E_ERROR);
 	set_time_limit(0);
+	
+	// 定义应用目录
+	define('APP_PATH','./Application/');
 	
 	define('MODE_NAME', 'cli');	// 自定义cli模式
 	define('BIND_MODULE', 'Home');	// 绑定到Home模块
